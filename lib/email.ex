@@ -4,16 +4,19 @@ defmodule CommonsPub.Emails.Email do
     otp_app: :cpub_emails,
     source: "cpub_emails_email"
 
-  alias Pointers.Changesets
   require Pointers.Changesets
+  alias Pointers.Changesets
   alias CommonsPub.Emails.Email
   alias Ecto.Changeset
   
   mixin_schema do
     field :email, :string
-    field :email_confirm_token, :string
-    field :email_confirmed_at, :utc_datetime_usec
+    field :confirm_token, :string
+    field :confirm_until, :utc_datetime_usec
+    field :confirmed_at, :utc_datetime_usec
   end
+
+  @default_confirm_duration {60 * 60 * 24, :second} # one day
 
   @defaults [
     cast:     [:email],
@@ -23,21 +26,28 @@ defmodule CommonsPub.Emails.Email do
 
   def changeset(email \\ %Email{}, attrs, opts \\ []) do
     Changesets.auto(email, attrs, opts, @defaults)
-    |> put_token()
+    |> put_token(opts)
     |> Changeset.unique_constraint(:email)
   end
 
   def put_token(changeset)
   def put_token(%Changeset{valid?: true, changes: %{email: email}}=changeset) do
-    token = Base.encode64(:crypto.strong_rand_bytes(16), padding: false)
-    Changeset.put_change(changeset, :email_confirm_token, token)
+    config = Changesets.config_for(__MODULE__)
+    if Keyword.get(config, :must_confirm, true) do
+      {count, unit} = Keyword.get(config, :confirm_duration, @default_confirm_duration)
+      token = Base.encode64(:crypto.strong_rand_bytes(16), padding: false)
+      until = DateTime.utc_now().add(count, unit)
+      Changeset.change(changeset, confirm_token: token, confirm_until: until)
+    else
+      Changeset.change(changeset, confirmed_at: DateTime.utc_now())
+    end
   end
-  def put_token(%Changeset{}=changeset), do: changeset
+  def put_token(%Changeset{}=changeset, _opts), do: changeset
 
   def confirm(%Email{}=email) do
     email
-    |> Changeset.cast(%{},[])
-    |> Changeset.change(email_confirm_token: nil, email_confirmed_at: DateTime.utc_now())
+    |> Changeset.cast(%{}, [])
+    |> Changeset.change(confirm_token: nil, confirm_until: nil, confirmed_at: DateTime.utc_now())
   end
 
 end
