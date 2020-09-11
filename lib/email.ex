@@ -26,24 +26,36 @@ defmodule CommonsPub.Emails.Email do
 
   def changeset(email \\ %Email{}, attrs, opts \\ []) do
     Changesets.auto(email, attrs, opts, @defaults)
-    |> put_token(opts)
+    |> put_token_on_email_change(opts)
     |> Changeset.unique_constraint(:email)
   end
 
-  def put_token(changeset)
-  def put_token(%Changeset{valid?: true, changes: %{email: email}}=changeset) do
-    config = Changesets.config_for(__MODULE__)
-    if Keyword.get(config, :must_confirm, true) do
-      {count, unit} = Keyword.get(config, :confirm_duration, @default_confirm_duration)
-      token = Base.encode64(:crypto.strong_rand_bytes(16), padding: false)
-      until = DateTime.utc_now().add(count, unit)
-      Changeset.change(changeset, confirm_token: token, confirm_until: until)
-    else
-      Changeset.change(changeset, confirmed_at: DateTime.utc_now())
-    end
+  @doc false
+  def put_token_on_email_change(changeset)
+  def put_token_on_email_change(%Changeset{valid?: true, changes: %{email: email}}=changeset) do
+    if Changesets.config_for(__MODULE__, :must_confirm, true),
+      do: put_token(changeset),
+      else: Changeset.change(changeset, confirmed_at: DateTime.utc_now())
   end
-  def put_token(%Changeset{}=changeset, _opts), do: changeset
+  def put_token_on_email_change(%Changeset{}=changeset), do: changeset
 
+  @doc """
+  Changeset function. Unconditionally sets the user as unconfirmed,
+  generates a confirmation token and puts an expiry on it determined
+  by the `:confirm_duration` config key (default one day).
+  """
+  def put_token(%Email{}=email), do: put_token(Changeset.cast(email, %{}, []))
+  def put_token(%Changeset{}=changeset) do
+    {count, unit} = Changesets.config_for(__MODULE__, :confirm_duration, @default_confirm_duration)
+    token = Base.encode64(:crypto.strong_rand_bytes(16), padding: false)
+    until = DateTime.utc_now().add(count, unit)
+    Changeset.change(changeset, confirmed_at: nil, confirm_token: token, confirm_until: until)
+  end    
+
+  @doc """
+  Changeset function. Marks the user's email as confirmed and removes
+  their confirmation token.
+  """
   def confirm(%Email{}=email) do
     email
     |> Changeset.cast(%{}, [])
@@ -64,15 +76,15 @@ defmodule CommonsPub.Emails.Email.Migration do
   def migrate_email(index_opts, :up) do
     create_mixin_table(Email) do
       add :email, :text, null: false
-      add :email_confirm_token, :text
-      add :email_confirmed_at, :timestamptz
+      add :confirm_token, :text
+      add :confirmed_at, :timestamptz
     end
     create_if_not_exists(unique_index(@email_table, [:email], index_opts))
-    create_if_not_exists(unique_index(@email_table, [:email_confirm_token], index_opts))
+    create_if_not_exists(unique_index(@email_table, [:confirm_token], index_opts))
   end
 
   def migrate_email(index_opts, :down) do
-    drop_if_exists(unique_index(@email_table, [:email_confirm_token], index_opts))
+    drop_if_exists(unique_index(@email_table, [:confirm_token], index_opts))
     drop_if_exists(unique_index(@email_table, [:email], index_opts))
     drop_mixin_table(Email)
   end
