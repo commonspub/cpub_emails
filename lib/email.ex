@@ -26,7 +26,7 @@ defmodule CommonsPub.Emails.Email do
 
   def changeset(email \\ %Email{}, attrs, opts \\ []) do
     Changesets.auto(email, attrs, opts, @defaults)
-    |> put_token_on_email_change(opts)
+    |> put_token_on_email_change()
     |> Changeset.unique_constraint(:email)
   end
 
@@ -47,8 +47,8 @@ defmodule CommonsPub.Emails.Email do
   def put_token(%Email{}=email), do: put_token(Changeset.cast(email, %{}, []))
   def put_token(%Changeset{}=changeset) do
     {count, unit} = Changesets.config_for(__MODULE__, :confirm_duration, @default_confirm_duration)
-    token = Base.encode64(:crypto.strong_rand_bytes(16), padding: false)
-    until = DateTime.utc_now().add(count, unit)
+    token = Base.encode32(:crypto.strong_rand_bytes(16), padding: false)
+    until = DateTime.add(DateTime.utc_now(), count, unit)
     Changeset.change(changeset, confirmed_at: nil, confirm_token: token, confirm_until: until)
   end    
 
@@ -77,6 +77,7 @@ defmodule CommonsPub.Emails.Email.Migration do
     create_mixin_table(Email) do
       add :email, :text, null: false
       add :confirm_token, :text
+      add :confirm_until, :timestamptz
       add :confirmed_at, :timestamptz
     end
     create_if_not_exists(unique_index(@email_table, [:email], index_opts))
